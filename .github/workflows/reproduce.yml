@@ -1,0 +1,94 @@
+name: Reproduce
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Set up Miniconda (for environment.yml support)
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+          python-version: 3.10
+
+      - name: Install dependencies and run reproduction
+        env:
+          REPRO_TIMEOUT: 600
+        run: |
+          set -euo pipefail
+
+          run_entrypoint() {
+            if [ -f scripts/reproduce.py ]; then
+              echo "Running scripts/reproduce.py"
+              python scripts/reproduce.py
+              return 0
+            fi
+            if [ -f reproduce.py ]; then
+              echo "Running reproduce.py"
+              python reproduce.py
+              return 0
+            fi
+            if [ -d tests ] || ls -1 tests 2>/dev/null >/dev/null; then
+              echo "Running pytest on tests/"
+              pytest -q --maxfail=1 || return $?
+              return 0
+            fi
+
+            NOTEBOOKS=$(git ls-files "*.ipynb" | grep -v "^\(.*/\)?\.ipynb_checkpoints/" || true)
+            if [ -n "${NOTEBOOKS}" ]; then
+              echo "Executing notebooks:"
+              echo "${NOTEBOOKS}"
+              pip install jupyter nbconvert
+              for nb in ${NOTEBOOKS}; do
+                echo "Executing $nb"
+                jupyter nbconvert --to notebook --execute "$nb" --ExecutePreprocessor.timeout=${REPRO_TIMEOUT} --output "${nb%.ipynb}.executed.ipynb"
+              done
+              return 0
+            fi
+
+            echo "No reproduction entrypoint found (scripts/reproduce.py, reproduce.py, tests/, or notebooks)."
+            exit 1
+          }
+
+          if [ -f environment.yml ]; then
+            echo "Found environment.yml — creating conda environment 'repro'"
+            conda env create -f environment.yml -n repro || conda env update -f environment.yml -n repro
+            source "$(conda info --base)/etc/profile.d/conda.sh"
+            conda activate repro
+            pip install -U pip
+            run_entrypoint
+          else
+            python -m pip install --upgrade pip
+            if [ -f requirements.txt ]; then
+              pip install -r requirements.txt
+            elif [ -f pyproject.toml ]; then
+              pip install .
+            else
+              pip install pytest jupyter nbconvert
+            fi
+            run_entrypoint
+          fi
+
+      - name: Upload reproduction artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reproduction-output
+          path: |
+            ./**/*.executed.ipynb
+            ./**/*.log
+            ./**/*.txt
+            tests/.pytest_cache/**
