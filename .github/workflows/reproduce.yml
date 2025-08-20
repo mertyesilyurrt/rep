@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       notebook_path:
-        description: 'Path to notebook (relative to repo root)'
+        description: 'MertYesilyurt_Report.ipynb'
         required: true
         default: 'MertYesilyurt_Report.ipynb'
       requirements_path:
-        description: 'Path to requirements.txt'
+        description: 'requirements.txt'
         required: true
         default: 'requirements.txt'
   push:
