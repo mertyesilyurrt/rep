@@ -1,0 +1,64 @@
+name: Reproduce notebook
+
+on:
+  workflow_dispatch:
+    inputs:
+      notebook_path:
+        description: 'Path to notebook (relative to repo root)'
+        required: true
+        default: 'MertYesilyurt_Report.ipynb'
+      requirements_path:
+        description: 'Path to requirements.txt'
+        required: true
+        default: 'requirements.txt'
+  push:
+    branches: [ main, master ]
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Show repo contents (debug)
+        run: |
+          echo "Repo root listing:"
+          ls -la
+          echo "Look for notebook and requirements:"
+          ls -la "${{ github.event.inputs.notebook_path }}" || true
+          ls -la "${{ github.event.inputs.requirements_path }}" || true
+
+      - name: Upgrade pip
+        run: |
+          python -m pip install --upgrade pip
+
+      - name: Install requirements + tools
+        run: |
+          python -m pip install -r "${{ github.event.inputs.requirements_path }}"
+          python -m pip install papermill nbformat
+
+      - name: Execute notebook (papermill)
+        run: |
+          mkdir -p outputs
+          papermill "${{ github.event.inputs.notebook_path }}" outputs/executed_notebook.ipynb --cwd .
+
+      - name: List outputs
+        run: |
+          echo "Outputs:"
+          ls -la outputs || true
+          echo "Processed dir (if created):"
+          ls -la data-clean/processed || true
+
+      - name: Upload executed notebook and processed outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: reproduction-results
+          path: |
+            outputs/executed_notebook.ipynb
+            data-clean/processed
