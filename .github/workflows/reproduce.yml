@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       notebook_path:
-        description: 'MertYesilyurt_Report.ipynb'
+        description: 'Path to the notebook to execute'
         required: true
         default: 'MertYesilyurt_Report.ipynb'
       requirements_path:
-        description: 'requirements.txt'
+        description: 'Path to the requirements file'
         required: true
         default: 'requirements.txt'
   push:
@@ -17,6 +17,7 @@ on:
 jobs:
   reproduce:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -26,33 +27,52 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Determine paths (with defaults for push)
+        id: paths
+        run: |
+          NOTEBOOK="${{ github.event.inputs.notebook_path || 'MertYesilyurt_Report.ipynb' }}"
+          REQS="${{ github.event.inputs.requirements_path || 'requirements.txt' }}"
+          echo "notebook_path=$NOTEBOOK" >> $GITHUB_OUTPUT
+          echo "requirements_path=$REQS" >> $GITHUB_OUTPUT
+
       - name: Show repo contents (debug)
         run: |
           echo "Repo root listing:"
           ls -la
-          echo "Look for notebook and requirements:"
-          ls -la "${{ github.event.inputs.notebook_path }}" || true
-          ls -la "${{ github.event.inputs.requirements_path }}" || true
+          echo "Requested notebook:"
+          ls -la "${{ steps.paths.outputs.notebook_path }}" || echo "Notebook not found"
+          echo "Requested requirements:"
+          ls -la "${{ steps.paths.outputs.requirements_path }}" || echo "Requirements file not found"
 
       - name: Upgrade pip
-        run: |
-          python -m pip install --upgrade pip
+        run: python -m pip install --upgrade pip
 
       - name: Install requirements + tools
         run: |
-          python -m pip install -r "${{ github.event.inputs.requirements_path }}"
+          REQS="${{ steps.paths.outputs.requirements_path }}"
+          if [ -f "$REQS" ]; then
+            echo "Installing from $REQS"
+            python -m pip install -r "$REQS"
+          else
+            echo "No requirements file at $REQS, skipping pip install -r"
+          fi
           python -m pip install papermill nbformat
 
       - name: Execute notebook (papermill)
         run: |
+          NB="${{ steps.paths.outputs.notebook_path }}"
           mkdir -p outputs
-          papermill "${{ github.event.inputs.notebook_path }}" outputs/executed_notebook.ipynb --cwd .
+          if [ ! -f "$NB" ]; then
+            echo "Notebook $NB not found!" >&2
+            exit 1
+          fi
+          papermill "$NB" outputs/executed_notebook.ipynb --cwd .
 
       - name: List outputs
         run: |
-          echo "Outputs:"
+          echo "Outputs directory:"
           ls -la outputs || true
-          echo "Processed dir (if created):"
+          echo "data-clean/processed (if created):"
           ls -la data-clean/processed || true
 
       - name: Upload executed notebook and processed outputs
