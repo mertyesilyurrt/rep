@@ -1,0 +1,128 @@
+name: Reproduce
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Set up Miniconda (installed but we create env in ./env to avoid name conflicts)
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+          python-version: 3.10
+
+      - name: Install dependencies and run reproduction (use gctg-clean.yaml next to the notebook)
+        env:
+          REPRO_TIMEOUT: 600
+        run: |
+          set -euo pipefail
+
+          # Helper to run a notebook or other entrypoints using $PY
+          run_entrypoint() {
+            # If a specific notebook exists, run that (preferred)
+            if [ -f "MertYesilyurt_Report.ipynb" ]; then
+              echo "Found MertYesilyurt_Report.ipynb — executing only this notebook"
+              $PY -m pip install --upgrade pip
+              $PY -m pip install jupyter nbconvert
+              $PY -m jupyter nbconvert --to notebook --execute "MertYesilyurt_Report.ipynb" \
+                --ExecutePreprocessor.timeout=${REPRO_TIMEOUT} --output "MertYesilyurt_Report.executed.ipynb"
+              return 0
+            fi
+
+            # Otherwise, prefer standard entrypoints
+            if [ -f scripts/reproduce.py ]; then
+              echo "Running scripts/reproduce.py"
+              $PY scripts/reproduce.py
+              return 0
+            fi
+            if [ -f reproduce.py ]; then
+              echo "Running reproduce.py"
+              $PY reproduce.py
+              return 0
+            fi
+            if [ -d tests ] || ls -1 tests 2>/dev/null >/dev/null; then
+              echo "Running pytest on tests/"
+              $PY -m pytest -q --maxfail=1 || return $?
+              return 0
+            fi
+
+            # Execute any notebooks as a last resort
+            NOTEBOOKS=$(git ls-files "*.ipynb" | grep -v -E "(/\.ipynb_checkpoints/|^\.ipynb_checkpoints/)" || true)
+            if [ -n "${NOTEBOOKS}" ]; then
+              echo "No explicit entrypoint; executing all notebooks:"
+              echo "${NOTEBOOKS}"
+              $PY -m pip install --upgrade pip
+              $PY -m pip install jupyter nbconvert
+              for nb in ${NOTEBOOKS}; do
+                echo "Executing $nb"
+                $PY -m jupyter nbconvert --to notebook --execute "$nb" --ExecutePreprocessor.timeout=${REPRO_TIMEOUT} --output "${nb%.ipynb}.executed.ipynb"
+              done
+              return 0
+            fi
+
+            echo "No reproduction entrypoint found (MertYesilyurt_Report.ipynb, scripts/reproduce.py, reproduce.py, tests/, or notebooks)."
+            exit 1
+          }
+
+          # Find gctg-clean YAML next to notebook (support .yml or .yaml anywhere in repo)
+          CONDA_FILE="$(git ls-files | grep -E '(^|/)gctg-clean\\.ya?ml$' | head -n1 || true)"
+          if [ -n "${CONDA_FILE}" ]; then
+            echo "Found conda file at: ${CONDA_FILE} — creating env at ./env (prefix)"
+            # Create env using a prefix to avoid named-env conflicts on runner
+            if conda env create -f "${CONDA_FILE}" -p ./env --quiet 2>&1; then
+              echo "Conda environment created at ./env"
+              PY="conda run -p ./env python"
+            else
+              echo "Conda create failed - trying conda env update to ./env"
+              if conda env update -f "${CONDA_FILE}" -p ./env --quiet 2>&1; then
+                echo "Conda environment updated at ./env"
+                PY="conda run -p ./env python"
+              else
+                echo "Conda create/update failed; falling back to venv + pip"
+                CONDA_FILE=""
+              fi
+            fi
+          fi
+
+          # Fallback to venv + pip if no conda file or conda failed
+          if [ -z "${CONDA_FILE}" ]; then
+            echo "Using Python venv fallback"
+            python -m venv .venv
+            # shellcheck disable=SC1091
+            source .venv/bin/activate
+            PY=".venv/bin/python"
+            $PY -m pip install --upgrade pip
+            if [ -f requirements.txt ]; then
+              $PY -m pip install -r requirements.txt
+            else
+              $PY -m pip install pytest jupyter nbconvert
+            fi
+          fi
+
+          # Run the chosen entrypoint
+          run_entrypoint
+
+      - name: Upload reproduction artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reproduction-output
+          path: |
+            MertYesilyurt_Report.executed.ipynb
+            ./**/*.executed.ipynb
+            ./**/*.log
+            ./**/*.txt
+            tests/.pytest_cache/**
