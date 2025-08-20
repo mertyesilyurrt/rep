@@ -10,6 +10,9 @@ on:
 jobs:
   repro:
     runs-on: ubuntu-latest
+    # prevent runaway long jobs
+    timeout-minutes: 120
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,40 +24,83 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          python -c "import sys,platform; print('Python', sys.version); print('Platform', platform.platform())"
-          python -c "import pandas, polars, numpy, pyarrow, statsmodels, spacy; print('pandas', pandas.__version__); print('polars', polars.__version__); print('numpy', numpy.__version__); print('pyarrow', pyarrow.__version__); print('statsmodels', statsmodels.__version__); print('spacy', spacy.__version__)"
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
-      - name: Execute MertYesilyurt_Report (execute+export HTML)
+      - name: Create & activate venv, upgrade pip
         run: |
-          set -e
+          python -m venv .venv
+          # shellcheck disable=SC1091
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+        shell: bash
+
+      - name: Install dependencies (requirements.txt) and tools needed for notebook execution
+        run: |
+          # shellcheck disable=SC1091
+          source .venv/bin/activate
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            # minimal runtime if no requirements provided
+            pip install pandas numpy pyarrow
+          fi
+
+          # Ensure notebook execution tools and kernel are available
+          pip install "jupyterlab>=3" nbconvert ipykernel
+          # register venv as kernel so nbconvert finds the python packages
+          python -m ipykernel install --user --name=repro-env --display-name="repro-env (venv)"
+          python -c "import sys,platform; print('Python', sys.version); print('Platform', platform.platform())"
+          python -c "import pandas, polars, numpy, pyarrow, statsmodels, spacy; print('pandas', getattr(pandas,'__version__','-')); print('polars', getattr(polars,'__version__','-')); print('numpy', getattr(numpy,'__version__','-')); print('pyarrow', getattr(pyarrow,'__version__','-')); print('statsmodels', getattr(statsmodels,'__version__','-')); print('spacy', getattr(spacy,'__version__','-'))" || true
+        shell: bash
+        # keep job logs readable if optional libs missing
+
+      - name: Execute MertYesilyurt_Report (execute + export HTML)
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source .venv/bin/activate
           if [ ! -f "MertYesilyurt_Report.ipynb" ]; then
             echo "MertYesilyurt_Report.ipynb not found in repo root." >&2
             exit 1
           fi
           mkdir -p outputs
-          jupyter nbconvert --to html --execute MertYesilyurt_Report.ipynb --output MertYesilyurt_Report.html --output-dir outputs --ExecutePreprocessor.kernel_name=python3 --ExecutePreprocessor.timeout=3600
+          # Run the notebook using the kernel we installed
+          jupyter nbconvert --to html --execute MertYesilyurt_Report.ipynb \
+            --output MertYesilyurt_Report.html --output-dir outputs \
+            --ExecutePreprocessor.kernel_name=repro-env --ExecutePreprocessor.timeout=3600
+        shell: bash
 
       - name: Collect artifacts
         run: |
+          set -euo pipefail
           mkdir -p artifacts/data-clean/processed artifacts/outputs/figures
-          # Copy processed tables and figures
           if [ -d data-clean/processed ]; then
             cp -R data-clean/processed/. artifacts/data-clean/processed/ || true
           fi
-          # Copy HTML reports
           if [ -f outputs/MertYesilyurt_Report.html ]; then
             mkdir -p artifacts/outputs
             cp outputs/MertYesilyurt_Report.html artifacts/outputs/MertYesilyurt_Report.html
           fi
+        shell: bash
 
-      - name: Compare outputs against baseline
+      - name: Compare outputs against baseline (if comparator exists)
         run: |
-          # Compare processed artifacts; HTML comparison is soft (hash warning allowed)
-          python scripts/compare_outputs.py --baseline data-clean/processed --candidate artifacts/data-clean/processed --html-baseline outputs/MertYesilyurt_Report.html --html-candidate artifacts/outputs/MertYesilyurt_Report.html --report compare_report.json || true
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source .venv/bin/activate
+          if [ -f scripts/compare_outputs.py ]; then
+            python scripts/compare_outputs.py --baseline data-clean/processed --candidate artifacts/data-clean/processed --html-baseline outputs/MertYesilyurt_Report.html --html-candidate artifacts/outputs/MertYesilyurt_Report.html --report compare_report.json || true
+          else
+            echo "scripts/compare_outputs.py not found; skipping comparison" > compare_report.json
+          fi
+        shell: bash
+        continue-on-error: false
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -62,4 +108,6 @@ jobs:
           name: notebook-artifacts
           path: |
             artifacts
+            outputs/MertYesilyurt_Report.html
+            MertYesilyurt_Report.executed.ipynb
             compare_report.json
