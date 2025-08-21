@@ -1,7 +1,0 @@
-subject_id,stimulus,condition,index,content,total_reading_time
-P01,text_pos_1.txt,pos,0,This,250.5
-P01,text_pos_1.txt,pos,1,is,180.2
-P01,text_neg_1.txt,neg,0,This,300.1
-P01,text_neg_1.txt,neg,1,is,200.7
-P02,text_pos_1.txt,pos,0,This,220.3
-P02,text_zero_1.txt,zero,0,word,190.8
