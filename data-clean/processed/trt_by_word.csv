@@ -1,0 +1,6 @@
+subject_id,stimulus,condition,index,content,total_reading_time
+S001,text1,A,2,cat,200
+S001,text1,A,3,sat,300
+S001,text1,A,5,mat,250
+S002,text1,A,2,cat,180
+S002,text1,A,5,mat,2500
